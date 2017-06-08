@@ -22,9 +22,8 @@ You can optionally skip all children below the current child by giving it non-ni
 
 # API
 
-- `org-graph-get-parents` to get parents of current entry.
-- `org-graph-get-children` to get children of current entry.
-
+- [x] `org-graph-get-parents` to get parents of current entry.
+- [x] `org-graph-get-children` to get children of current entry.
 - [x] `org-graph-add-parent` to add a parent to the current entry.
   - [ ] check if the parent is defined by hierarchy and do not add the ID
 - [x] `org-graph-add-child` to add a child to the current entry.
