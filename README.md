@@ -30,3 +30,5 @@ You can optionally skip all children below the current child by giving it non-ni
   - [ ] check if the child is defined by hierarchy and do not add the ID
 - [ ] `org-graph-remove-parent` to remove a parent from the current entry.
 - [ ] `org-graph-remove-child` to remove a child from the current entry.
+
+It would be also nice to add some way to store *link* properties (that is, label/annotate the edges of the graph).  We might use some simple property format like `:GRAPH_EDGE: id <properties>`.  This can only be stored on e.g. parent (or child) because we can get to the other end of the relation relatively simply by using the traversal properties.
