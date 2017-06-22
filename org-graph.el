@@ -14,11 +14,14 @@ as well give it GRAPH_PARENT_SKIP property as well.
 
 Return list of markers pointing to the parent entries."
   (org-with-point-at pom
-    (let (re)
-      (while (and (not (org-entry-properties nil "GRAPH_PARENT_ROOT"))
-                  (org-up-heading-safe))
-        (unless (org-entry-properties nil "GRAPH_PARENT_SKIP")
-          (push (point-marker) re)))
+    (let ((org-agenda-skip-function-global nil)
+          re)
+      (catch 'done
+        (while (org-up-heading-safe)
+          (unless (org-entry-properties nil "GRAPH_PARENT_SKIP")
+            (push (point-marker) re))
+          (when (org-entry-properties nil "GRAPH_PARENT_ROOT")
+            (throw 'done t))))
       (nreverse re))))
 
 (defun org-graph--get-parents-from-property (&optional pom)
@@ -63,21 +66,32 @@ GRAPH_CHILD_SKIP property.
 
 Return list of markers pointing to the child entries."
   (org-with-point-at pom
-    (let* ((re nil)
+    (org-back-to-heading t)
+    (setq pom (point-marker))
+    (let* ((org-agenda-skip-function-global nil)
+           (re nil)
            (children
             (org-map-entries
              'point-marker t 'tree
              (lambda ()
-               (if (org-entry-properties nil "GRAPH_CHILD_LEAF")
-                   ;; we still want to include this one if it doesn't have skip on it
-                   (progn
-                     (unless (org-entry-properties nil "GRAPH_CHILD_SKIP")
-                       (push (point-marker) re))
-                     (save-excursion (org-end-of-subtree t)))
+               (cond
+                ;; do not skip if we started from this node and the
+                ;; leaf property is "self"
+                ((and (equal "self" (org-entry-get (point) "GRAPH_CHILD_LEAF"))
+                      (equal (marker-position pom) (point)))
+                 nil)
+                ((org-entry-properties nil "GRAPH_CHILD_LEAF")
+                 ;; we still want to include this one if it doesn't
+                 ;; have skip on it
+                 (progn
+                   (unless (org-entry-properties nil "GRAPH_CHILD_SKIP")
+                     (push (point-marker) re))
+                   (save-excursion (org-end-of-subtree t))))
+                (t
                  (when (org-entry-properties nil "GRAPH_CHILD_SKIP")
                    (save-excursion
                      (outline-next-heading)
-                     (point))))))))
+                     (point)))))))))
       (let ((re (-sort '< (-concat re children))))
         ;; pop the first entry if it is the current one, we don't want
         ;; to duplicate it
