@@ -1,6 +1,6 @@
 # Relations
 
-Relations are maintained through the outline hierarchy and special properties on the entries so we can model arbitrary graphs instead of only DAGs.  This means you can define parents or children completely outside the hierarchy or even in different files.
+Relations are maintained through the outline hierarchy and special properties on the entries so we can model arbitrary graphs instead of only trees.  This means you can define parents or children completely outside the hierarchy or even in different files.
 
 Relations are kept in sync bidirectionally so please only use the API to maintain them otherwise things might get lost.  Because the relations are bidirectional the graph traversal and querying is extremly fast.
 
