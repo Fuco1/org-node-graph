@@ -1,6 +1,10 @@
+(defun org-graph-target (prompt)
+  (let ((org-refile-target-verify-function nil))
+    (org-refile-get-location prompt)))
+
 ;;; Parents
 
-(defun org-graph--get-parents-from-tree (&optional pom)
+(defun org-graph--get-parent-from-tree (&optional pom)
   "Get all parents of the headline at POM.
 
 If any of the parents has the property GRAPH_PARENT_SKIP this
@@ -12,17 +16,15 @@ GRAPH_PARENT_ROOT all the parents above this headline will be
 ignored.  This root parent is included, so if you want to skip it
 as well give it GRAPH_PARENT_SKIP property as well.
 
-Return list of markers pointing to the parent entries."
+Return marker pointing to the first eligible parent entry."
   (org-with-point-at pom
-    (let ((org-agenda-skip-function-global nil)
-          re)
+    (let ((org-agenda-skip-function-global nil))
       (catch 'done
         (while (org-up-heading-safe)
           (unless (org-entry-properties nil "GRAPH_PARENT_SKIP")
-            (push (point-marker) re))
+            (throw 'done (point-marker)))
           (when (org-entry-properties nil "GRAPH_PARENT_ROOT")
-            (throw 'done t))))
-      (nreverse re))))
+            (throw 'done nil)))))))
 
 (defun org-graph--get-parents-from-property (&optional pom)
   "Get all parents specified in the GRAPH_PARENTS property at POM.
@@ -33,19 +35,29 @@ Return list of markers pointing to the parent entries."
       (-map (lambda (entry) (org-id-find entry 'marker)) parents))))
 
 (defun org-graph-get-parents (&optional pom)
-  "Return all parents at POM."
+  "Return all parents at POM.
+
+If POM is a list, first extract the :pom property and use that."
+  (setq pom (or (and (listp pom)
+                     (plist-get pom :pom))
+                pom
+                (point-marker)))
   (let ((parents-from-property (org-graph--get-parents-from-property pom))
-        (parents-from-tree (org-graph--get-parents-from-tree pom)))
+        (parent-from-tree (org-graph--get-parent-from-tree pom)))
     (-map
      (lambda (p)
        (org-with-point-at p
-         (list :pom p :name (org-get-heading 'no-tags 'no-todo))))
-     (-concat parents-from-tree parents-from-property))))
+         (list :pom p
+               :id (org-id-get-create)
+               :name (org-get-heading 'no-tags 'no-todo))))
+     (if parent-from-tree
+         (cons parent-from-tree parents-from-property)
+       parents-from-property))))
 
 (defun org-graph-add-parent (&optional pom)
   (interactive)
   (org-with-point-at pom
-    (-when-let (parent (-last-item (org-refile-get-location "Parent: ")))
+    (-when-let (parent (-last-item (org-graph-target "Parent: ")))
       (let ((my-id (org-id-get-create))
             (parent-id (org-with-point-at parent (org-id-get-create))))
         (org-entry-add-to-multivalued-property parent "GRAPH_CHILDREN" my-id)
@@ -56,47 +68,28 @@ Return list of markers pointing to the parent entries."
   "Get all children of the headline at POM.
 
 If any of the children has the property GRAPH_CHILD_SKIP this
-child is not included in the children but its children *are*
-traversed.
+child is not included in the children.
 
-If any of the children has the property GRAPH_CHILD_LEAF no
-children of that headline will be included.  This leaf headline
-is included, so if you want to skip it as well give it the
-GRAPH_CHILD_SKIP property.
+If any of the headlines has the property GRAPH_CHILD_LEAF no
+children of that headline will be included.  In other words,
+calling this function at such a headline will return no children.
 
 Return list of markers pointing to the child entries."
   (org-with-point-at pom
     (org-back-to-heading t)
     (setq pom (point-marker))
-    (let* ((org-agenda-skip-function-global nil)
-           (re nil)
-           (children
-            (org-map-entries
-             'point-marker t 'tree
-             (lambda ()
-               (cond
-                ;; do not skip if we started from this node and the
-                ;; leaf property is "self"
-                ((and (equal "self" (org-entry-get (point) "GRAPH_CHILD_LEAF"))
-                      (equal (marker-position pom) (point)))
-                 nil)
-                ((org-entry-properties nil "GRAPH_CHILD_LEAF")
-                 ;; we still want to include this one if it doesn't
-                 ;; have skip on it
-                 (progn
-                   (unless (org-entry-properties nil "GRAPH_CHILD_SKIP")
-                     (push (point-marker) re))
-                   (save-excursion (org-end-of-subtree t))))
-                (t
-                 (when (org-entry-properties nil "GRAPH_CHILD_SKIP")
-                   (save-excursion
-                     (outline-next-heading)
-                     (point)))))))))
-      (let ((re (-sort '< (-concat re children))))
-        ;; pop the first entry if it is the current one, we don't want
-        ;; to duplicate it
-        (when (= (car re) (save-excursion (org-back-to-heading t) (point)))
-          (pop re))
+    (unless (org-entry-get (point) "GRAPH_CHILD_LEAF")
+      (let* ((org-agenda-skip-function-global nil)
+             (re))
+        (org-map-entries
+         'point-marker t 'tree
+         (lambda ()
+           (unless (org-entry-properties nil "GRAPH_CHILD_SKIP")
+             (push (point-marker) re))
+           (unless (= (point) pom)
+             (save-excursion (org-end-of-subtree t)))))
+        (setq re (nreverse re))
+        (when (= (car re) pom) (pop re))
         re))))
 
 (defun org-graph--get-children-from-property (&optional pom)
@@ -108,19 +101,27 @@ Return list of markers pointing to the child entries."
       (-map (lambda (entry) (org-id-find entry 'marker)) parents))))
 
 (defun org-graph-get-children (&optional pom)
-  "Return all children at POM."
+  "Return all children at POM.
+
+If POM is a list, first extract the :pom property and use that."
+  (setq pom (or (and (listp pom)
+                     (plist-get pom :pom))
+                pom
+                (point-marker)))
   (let ((children-from-property (org-graph--get-children-from-property pom))
         (children-from-tree (org-graph--get-children-from-tree pom)))
     (-map
      (lambda (p)
        (org-with-point-at p
-         (list :pom p :name (org-get-heading 'no-tags 'no-todo))))
+         (list :pom p
+               :id (org-id-get-create)
+               :name (org-get-heading 'no-tags 'no-todo))))
      (-concat children-from-tree children-from-property))))
 
 (defun org-graph-add-child (&optional pom)
   (interactive)
   (org-with-point-at pom
-    (-when-let (child (-last-item (org-refile-get-location "Child: ")))
+    (-when-let (child (-last-item (org-graph-target "Child: ")))
       (let ((my-id (org-id-get-create))
             (child-id (org-with-point-at child (org-id-get-create))))
         (org-entry-add-to-multivalued-property child "GRAPH_PARENTS" my-id)
