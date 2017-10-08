@@ -126,3 +126,21 @@ If POM is a list, first extract the :pom property and use that."
             (child-id (org-with-point-at child (org-id-get-create))))
         (org-entry-add-to-multivalued-property child "GRAPH_PARENTS" my-id)
         (org-entry-add-to-multivalued-property pom "GRAPH_CHILDREN" child-id)))))
+
+;;; Siblings
+
+(defun org-graph-get-siblings (&optional pom)
+  "Get siblings of the entry at POM."
+  (org-with-point-at pom
+    (org-back-to-heading t)
+    (let* ((pom (point-marker))
+           (parents (org-graph-get-parents pom))
+           (siblings (-mapcat (-lambda ((&plist :pom pom))
+                                (org-graph-get-children pom))
+                              parents)))
+      (let ((-compare-fn (-lambda ((&plist :pom pom1)
+                                   (&plist :pom pom2))
+                           (equal pom1 pom2))))
+        (-remove (-lambda ((&plist :pom p))
+                   (equal p pom))
+                 (-uniq siblings))))))
