@@ -144,3 +144,90 @@ If POM is a list, first extract the :pom property and use that."
         (-remove (-lambda ((&plist :pom p))
                    (equal p pom))
                  (-uniq siblings))))))
+
+;;; Graphics
+(defun org-graph-render-node (&optional pom)
+  (interactive)
+  (setq pom (or pom (point-marker)))
+  (let* ((buffer (get-buffer-create "*org-node-graph*"))
+         (parents (org-graph-get-parents pom))
+         (children (org-graph-get-children pom))
+         (siblings (org-graph-get-siblings pom)))
+    (with-current-buffer buffer
+      (erase-buffer)
+      (org-mode)
+      (--each parents
+        (insert (propertize
+                 (format
+                  "[[org-node-graph:%s][%s]]"
+                  (plist-get it :id)
+                  (plist-get it :name))
+                 (intern (plist-get it :id)) t)
+                "    "))
+      (insert "\n\n")
+      (insert (propertize
+               (org-with-point-at pom (org-get-heading 'no-tags 'no-todo))
+               'font-lock-face 'font-lock-warning-face
+               (intern (org-with-point-at pom (org-id-get-create))) t)
+               "    ")
+      (--each siblings
+        (let ((sibling (format
+                        "[[org-node-graph:%s][%s]]"
+                        (plist-get it :id)
+                        (plist-get it :name))))
+          (insert (propertize
+                   sibling
+                   'org-node-graph-relatives
+                   (-map (-lambda ((&plist :id id)) id)
+                         (-concat (org-graph-get-children it)
+                                  (org-graph-get-parents it)))
+                   (intern (plist-get it :id)) t)
+                  "    ")))
+      (insert "\n\n")
+      (--each children
+        (insert (propertize
+                 (format
+                  "[[org-node-graph:%s][%s]]"
+                  (plist-get it :id)
+                  (plist-get it :name))
+                 'org-node-graph-relatives
+                 (-map (-lambda ((&plist :id id)) id)
+                       (org-graph-get-parents it))
+                 (intern (plist-get it :id)) t)
+                "    "))
+
+      (put-text-property (point-min) (point-max) 'help-echo 'org-graph-help-echo))
+    (pop-to-buffer buffer)))
+
+(defun org-graph-cursor-sensor (window old dir)
+  (if (eq dir 'left)
+      (ov-clear 'org-node-graph)
+    (org-graph-highlight (window-point window))))
+
+(defun org-graph-help-echo (window _object position)
+  (if (get-text-property position 'org-node-graph-relatives)
+      (with-selected-window window
+        (org-graph-highlight position))
+    (ov-clear 'org-node-graph))
+  "")
+
+(defun org-graph-highlight (point)
+  (ov-clear 'org-node-graph)
+  (save-excursion
+    (--each (get-text-property point 'org-node-graph-relatives)
+      (let* ((beg (text-property-any
+                   (point-min) (point-max)
+                   (intern it) t))
+             (end (next-single-property-change beg (intern it))))
+        (ov beg end 'org-node-graph t 'face '(:background "black"))))))
+
+
+(org-link-set-parameters
+ "org-node-graph"
+ :follow (lambda (id) (org-graph-render-node (org-id-find id 'marker)))
+ :activate-func (lambda (beg end path _ignored)
+                  (add-text-properties
+                   beg end
+                   (list
+                    'cursor-sensor-functions (list 'org-graph-cursor-sensor))))
+ :help-echo 'org-graph-help-echo)
