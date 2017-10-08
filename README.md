@@ -6,9 +6,9 @@ Relations are kept in sync bidirectionally so please only use the API to maintai
 
 ## Parents
 
-Parents are defined by the `GRAPH_PARENTS` property as list of IDs and implicitly through the org outline hierarchy: all headlines above this one are this entry's parents.
+Parents are defined by the `GRAPH_PARENTS` property as list of IDs and implicitly through the org outline hierarchy: the headline above this one is this entry's parent.
 
-You can optionally skip parents defined by hierarchy if you give them non-nil property `GRAPH_PARENT_SKIP`.  This will skip the parent with the property but will continue the traversal further up.
+You can optionally skip a level defined by hierarchy if you give the headline non-nil property `GRAPH_PARENT_SKIP`.  This will skip the parent with the property but will continue the traversal further up.
 
 You can optionally skip all parents above the current one by giving it non-nil property `GRAPH_PARENT_ROOT`.  This will include this parent but will not traverse any further.  If you do not want to include the root give it the `GRAPH_PARENT_SKIP` property as well.
 
@@ -16,9 +16,9 @@ You can optionally skip all parents above the current one by giving it non-nil p
 
 Children are defined by the `GRAPH_CHILDREN` property as list of IDs and implicitly through the org outline hierarchy: the entire subtree (excluding current entry) are this entry's children.
 
-You can optionally skip children defined by hierarchy if you give them non-nil property `GRAPH_CHILD_SKIP`.  This will skip the child with the property but will continue the traversal further down.
+You can optionally skip children defined by hierarchy if you give them non-nil property `GRAPH_CHILD_SKIP`.  This will skip the child with the property and not include it in the list of children.
 
-You can optionally skip all children below the current child by giving it non-nil property `GRAPH_CHILD_LEAF`.  This will include this child but will not traverse any further.  If you do not want to include the leaf give it the `GRAPH_CHILD_SKIP` property as well.
+You can optionally skip all children below the current headline by giving it non-nil property `GRAPH_CHILD_LEAF`.  This will include this child but will not traverse any further.  If you do not want to include the leaf give it the `GRAPH_CHILD_SKIP` property as well.
 
 # API
 
