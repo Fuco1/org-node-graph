@@ -14,11 +14,13 @@ You can optionally skip all parents above the current one by giving it non-nil p
 
 ## Children
 
-Children are defined by the `GRAPH_CHILDREN` property as list of IDs and implicitly through the org outline hierarchy: the entire subtree (excluding current entry) are this entry's children.
+Children are defined by the `GRAPH_CHILDREN` property as list of IDs and implicitly through the org outline hierarchy: all the direct children (excluding current entry) are this entry's children.
 
 You can optionally skip children defined by hierarchy if you give them non-nil property `GRAPH_CHILD_SKIP`.  This will skip the child with the property and not include it in the list of children.
 
 You can optionally skip all children below the current headline by giving it non-nil property `GRAPH_CHILD_LEAF`.  This will include this child but will not traverse any further.  If you do not want to include the leaf give it the `GRAPH_CHILD_SKIP` property as well.
+
+Using `GRAPH_CHILD_LEAF` allows you to have an entire subtree as an "entry" for the given leaf without exposing it as hierarchy to the graph traversing.
 
 # API
 

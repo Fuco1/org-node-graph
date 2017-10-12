@@ -1,0 +1,50 @@
+* Top 1
+** Sub 1.1
+   :PROPERTIES:
+   :ID:       f37496aa-9240-4d69-a44f-000b3a59b40b
+   :END:
+** Sub 1.2
+   :PROPERTIES:
+   :ID:       c3e4b389-6496-438f-88eb-1eb8126e5bc5
+   :END:
+* Top 2
+** Sub 2.1
+   :PROPERTIES:
+   :GRAPH_CHILD_SKIP: t
+   :END:
+** Sub 2.2
+   :PROPERTIES:
+   :ID:       ca1173bd-4cf9-4554-9317-7aefce20eb6d
+   :END:
+* Top 3
+*** Sub 3.1.1
+    :PROPERTIES:
+    :ID:       33c46f71-1a30-4a84-99f0-b98c8e7e21ab
+    :END:
+** Sub 3.2
+   :PROPERTIES:
+   :ID:       799ff262-e19f-4d5b-b130-1f80b8033e45
+   :END:
+* Top 4
+** Sub 4.1
+   :PROPERTIES:
+   :ID:       d04c7df3-9fbf-4f2c-82b5-5a71686d45e0
+   :END:
+*** Sub 4.1.1
+* Top 5
+** Sub 5.1
+   :PROPERTIES:
+   :GRAPH_CHILD_LEAF: t
+   :ID:       bf73f2ad-6950-4a57-b543-d0638fb22baf
+   :END:
+* Top 6
+  :PROPERTIES:
+  :GRAPH_CHILD_LEAF: t
+  :END:
+** Sub 6.1
+** Sub 6.2
+* asdp
+
+# Local Variables:
+# org-refile-targets: ((nil :maxlevel . 9))
+# End:

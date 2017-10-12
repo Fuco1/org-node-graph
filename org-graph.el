@@ -1,3 +1,6 @@
+(require 'dash)
+(require 'org)
+
 (defun org-graph-target (prompt)
   (let ((org-refile-target-verify-function nil))
     (org-refile-get-location prompt)))
@@ -20,6 +23,8 @@ Return marker pointing to the first eligible parent entry."
   (org-with-point-at pom
     (let ((org-agenda-skip-function-global nil))
       (catch 'done
+        (when (org-entry-properties nil "GRAPH_PARENT_ROOT")
+          (throw 'done nil))
         (while (org-up-heading-safe)
           (unless (org-entry-properties nil "GRAPH_PARENT_SKIP")
             (throw 'done (point-marker)))
@@ -231,3 +236,5 @@ If POM is a list, first extract the :pom property and use that."
                    (list
                     'cursor-sensor-functions (list 'org-graph-cursor-sensor))))
  :help-echo 'org-graph-help-echo)
+
+(provide 'org-graph)
