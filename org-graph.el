@@ -102,8 +102,8 @@ Return list of markers pointing to the child entries."
 
 Return list of markers pointing to the child entries."
   (org-with-point-at pom
-    (let ((parents (org-entry-get-multivalued-property nil "GRAPH_CHILDREN")))
-      (-map (lambda (entry) (org-id-find entry 'marker)) parents))))
+    (let ((children (org-entry-get-multivalued-property nil "GRAPH_CHILDREN")))
+      (-map (lambda (entry) (org-id-find entry 'marker)) children))))
 
 (defun org-graph-get-children (&optional pom)
   "Return all children at POM.
