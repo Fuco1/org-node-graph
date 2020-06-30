@@ -300,6 +300,47 @@ If UNSAFE is non-nil, assume point is on headline."
      'org-node-graph-relatives
      (-uniq (-map (-lambda ((&plist :id)) id) relatives-list)))))
 
+(defun org-graph--render-properties (pom)
+  "Render PROPERTIES.
+
+Properties is an ALIST of (KEY . PROPERTY).
+
+PROPERTY can be a list, the items will be joined by a comma."
+  (let* ((definitions
+           (--filter
+            (cdr it)
+            (-map
+             (-lambda ((name . type))
+               (cond
+                ((eq type :single)
+                 (cons name (org-entry-get pom name)))
+                ((eq type :multi)
+                 (cons name (org-entry-get-multivalued-property pom name)))
+                (t (error "Only :single or :multi type is supported"))))
+             org-graph-rendered-properties)))
+         (max-length (-max (-map #'length (-map #'car definitions))))
+         (rendered-props nil))
+
+    (--each definitions
+      (push
+       (format (format "- %%-%ds :: %%s\n" max-length)
+               (car it)
+               (if (listp (cdr it))
+                   (mapconcat #'identity (cdr it) ", ")
+                 (cdr it)))
+       rendered-props))
+
+    (nreverse rendered-props)))
+
+(defcustom org-graph-rendered-properties
+  '(
+    ("KEYWORDS" . :multi)
+    ("SOURCE" . :single)
+    ("AUTHOR" . :single)
+    ("PUBLISHED" . :single)
+    )
+  "Properties rendered on the node page.")
+
 (defun org-graph-render-node (&optional pom)
   (interactive)
   (setq pom (or pom (point-marker)))
@@ -308,8 +349,6 @@ If UNSAFE is non-nil, assume point is on headline."
          (parents (org-graph-get-parents pom))
          (children (org-graph-get-children pom))
          (siblings (org-graph-get-siblings pom))
-         (keywords (org-entry-get-multivalued-property pom "KEYWORDS"))
-         (source (org-entry-get pom "SOURCE"))
          (abstract
           (org-graph--extract-special-element pom
             'special-block
@@ -359,24 +398,8 @@ If UNSAFE is non-nil, assume point is on headline."
 
       (goto-char (point-max))
 
-      ;; find the maximum definition name
-      (let ((definitions nil)
-            (max-length 0))
-        (when source (push "source" definitions))
-        (when keywords (push "keywords" definitions))
-        (when definitions
-          (setq max-length
-                (length (-max-by (lambda (a b) (>= (length a) (length b))) definitions))))
-
-        (when source
-          (insert
-           (format (format "- %%-%ds :: %%s\n" max-length) "SOURCE" source)))
-        (when keywords
-          (insert
-           (format (format "- %%-%ds :: %%s\n" max-length) "KEYWORDS"
-                   (mapconcat #'identity keywords ", "))))
-
-        (when (or source keywords ) (insert "\n")))
+      (when-let ((rendered-props (org-graph--render-properties pom)))
+        (insert (s-join "" rendered-props) "\n"))
 
       (when resources
         (insert "* Resources\n"
