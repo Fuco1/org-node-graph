@@ -1,9 +1,31 @@
 (require 'dash)
 (require 'org)
+(require 'orgba)
 
 (defun org-graph-target (prompt)
   (let ((org-refile-target-verify-function nil))
     (org-refile-get-location prompt)))
+
+(defun org-graph--resolve-pom (&optional pom)
+  "Resolve POM.
+
+If POM is a list, it is assumed to be a plist and we extract the
+:pom key.
+
+If POM is a number-or-marker it is returned.
+
+If POM is nil, `point-marker' is returned."
+  (or (and (listp pom)
+           (plist-get pom :pom))
+      pom
+      (point-marker)))
+
+(defun org-graph--make-node (pom)
+  "Make node at POM"
+  (org-with-point-at pom
+    (list :pom pom
+          :id (org-id-get-create)
+          :name (org-get-heading 'no-tags 'no-todo))))
 
 ;;; Parents
 
@@ -136,6 +158,7 @@ If POM is a list, first extract the :pom property and use that."
 
 (defun org-graph-get-siblings (&optional pom)
   "Get siblings of the entry at POM."
+  (setq pom (org-graph--resolve-pom pom))
   (org-with-point-at pom
     (org-back-to-heading t)
     (let* ((pom (point-marker))
@@ -150,59 +173,240 @@ If POM is a list, first extract the :pom property and use that."
                    (equal p pom))
                  (-uniq siblings))))))
 
+(defun org-graph-leaf-p (&optional pom)
+  (setq pom (org-graph--resolve-pom pom))
+  (org-entry-get pom "GRAPH_CHILD_LEAF"))
+
+(defun org-graph-set-leaf (&optional pom)
+  (interactive)
+  (setq pom (or pom (point-marker)))
+  (org-entry-put pom "GRAPH_CHILD_LEAF" "t"))
+
+(defun org-graph-set-root (&optional pom)
+  (interactive)
+  (setq pom (or pom (point-marker)))
+  (org-entry-put pom "GRAPH_CHILD_ROOT" "t"))
+
+(defun org-graph-set-parent-skip (&optional pom)
+  (interactive)
+  (setq pom (or pom (point-marker)))
+  (org-entry-put pom "GRAPH_PARENT_SKIP" "t"))
+
+(defun org-graph-set-child-skip (&optional pom)
+  (interactive)
+  (setq pom (or pom (point-marker)))
+  (org-entry-put pom "GRAPH_CHILD_SKIP" "t"))
+
+(defun org-graph--read-relative (prompt collection)
+  "Read a relative with PROMPT from COLLECTION."
+  (let* ((collection-alist
+          (-map
+           (lambda (p)
+             (org-with-point-at (plist-get p :pom)
+               (cons
+                (format "%s/%s"
+                        (org-get-category)
+                        (s-join "/" (org-get-outline-path 'with-self)))
+                p)))
+           collection))
+         (choice (if (= (length collection) 1)
+                     (caar collection-alist)
+                   (completing-read prompt collection-alist nil t
+                                    nil nil (caar collection-alist)))))
+    (plist-get (cdr (assoc choice collection-alist)) :id)))
+
+(defun org-graph-goto-parent (&optional pom)
+  (interactive)
+  (setq pom (or pom (point-marker)))
+  (let* ((id (org-graph--read-relative
+              "Parent: "
+              (org-graph-get-parents pom))))
+    (if id (org-id-goto id)
+      (user-error "Parent node not found"))))
+
+(defun org-graph-goto-child (&optional pom)
+  (interactive)
+  (setq pom (or pom (point-marker)))
+  (let* ((id (org-graph--read-relative
+              "Child: "
+              (org-graph-get-children pom))))
+    (if id (org-id-goto id)
+      (user-error "Child node not found"))))
+
+(drawer
+ (:begin 40170 :end 40372 :drawer-name "RESOURCES" :contents-begin 40182 :contents-end 40365 ...))
+
+(defun org-graph--extract-special-element (pom type filter)
+  (declare (indent 1))
+  (org-with-point-at pom
+    (save-excursion
+      (save-restriction
+        (widen)
+        (org-narrow-to-subtree)
+        (let ((max (save-excursion (orgba-next-heading))))
+          (org-element-map (org-element-parse-buffer) type
+            (lambda (elem)
+              (let ((prop (cadr elem)))
+                (when (and (< (plist-get prop :begin) max)
+                           (funcall filter prop))
+                  (buffer-substring-no-properties
+                   (plist-get prop :contents-begin)
+                   (plist-get prop :contents-end)))))
+            nil
+            'first-match))))))
+
 ;;; Graphics
+;; From https://github.com/alphapapa/unpackaged.el
+(defun org-graph--forward-to-entry-content (&optional unsafe)
+  "Skip headline, planning line, and all drawers in current entry.
+If UNSAFE is non-nil, assume point is on headline."
+  (unless unsafe
+    ;; To improve performance in loops (e.g. with `org-map-entries')
+    (org-back-to-heading))
+  (let ((max-pos (save-excursion (orgba-next-heading)))
+        (pos (point)))
+    (while (and pos (< pos max-pos))
+      (when-let* ((element (org-element-at-point)))
+        (setq pos
+              (pcase element
+                (`(headline . ,_) (org-element-property :contents-begin element))
+                (`(,(or 'planning 'property-drawer 'drawer) . ,_) (org-element-property :end element))))
+        (when pos (goto-char pos))))))
+
+(defun org-graph--get-headline-content ()
+  "Get content of current headline"
+  (let ((max-pos (save-excursion (orgba-next-heading))))
+    (save-excursion
+      (org-graph--forward-to-entry-content)
+      (buffer-substring-no-properties (point) max-pos))))
+
+(cl-defun org-graph--render-link (item &optional relatives
+                                       &key (width 40))
+  (let* ((id (plist-get item :id))
+         (name (plist-get item :name))
+         (relatives (-list relatives))
+         (relatives-list
+          (-concat (when (memq 'children relatives)
+                     (org-graph-get-children item))
+                   (when (memq 'parents relatives)
+                     (org-graph-get-parents item)))))
+    (propertize
+     (format "[[org-node-graph:%s][%s]]"
+             id
+             (truncate-string-to-width name width nil nil t))
+     (intern id) t
+     'org-node-graph-id id
+     'org-node-graph-name name
+     'org-node-graph-relatives
+     (-uniq (-map (-lambda ((&plist :id)) id) relatives-list)))))
+
 (defun org-graph-render-node (&optional pom)
   (interactive)
   (setq pom (or pom (point-marker)))
-  (let* ((buffer (get-buffer-create "*org-node-graph*"))
+  (let* ((current-node (org-graph--make-node pom))
+         (buffer (get-buffer-create "*org-node-graph*"))
          (parents (org-graph-get-parents pom))
          (children (org-graph-get-children pom))
-         (siblings (org-graph-get-siblings pom)))
+         (siblings (org-graph-get-siblings pom))
+         (keywords (org-entry-get-multivalued-property pom "KEYWORDS"))
+         (source (org-entry-get pom "SOURCE"))
+         (abstract
+          (org-graph--extract-special-element pom
+            'special-block
+            (lambda (prop)
+              (equal (plist-get prop :type) "ABSTRACT"))))
+         (resources
+          (org-graph--extract-special-element pom
+            'drawer
+            (lambda (prop)
+              (equal (plist-get prop :drawer-name) "RESOURCES")))))
+    (pop-to-buffer buffer)
     (with-current-buffer buffer
+      (toggle-read-only -1)
       (erase-buffer)
       (org-mode)
-      (--each parents
-        (insert (propertize
-                 (format
-                  "[[org-node-graph:%s][%s]]"
-                  (plist-get it :id)
-                  (plist-get it :name))
-                 (intern (plist-get it :id)) t)
-                "    "))
-      (insert "\n\n")
-      (insert (propertize
-               (org-with-point-at pom (org-get-heading 'no-tags 'no-todo))
-               'font-lock-face 'font-lock-warning-face
-               (intern (org-with-point-at pom (org-id-get-create))) t)
-               "    ")
-      (--each siblings
-        (let ((sibling (format
-                        "[[org-node-graph:%s][%s]]"
-                        (plist-get it :id)
-                        (plist-get it :name))))
-          (insert (propertize
-                   sibling
-                   'org-node-graph-relatives
-                   (-map (-lambda ((&plist :id id)) id)
-                         (-concat (org-graph-get-children it)
-                                  (org-graph-get-parents it)))
-                   (intern (plist-get it :id)) t)
-                  "    ")))
-      (insert "\n\n")
-      (--each children
-        (insert (propertize
-                 (format
-                  "[[org-node-graph:%s][%s]]"
-                  (plist-get it :id)
-                  (plist-get it :name))
-                 'org-node-graph-relatives
-                 (-map (-lambda ((&plist :id id)) id)
-                       (org-graph-get-parents it))
-                 (intern (plist-get it :id)) t)
-                "    "))
+      (variable-pitch-mode -1)
 
-      (put-text-property (point-min) (point-max) 'help-echo 'org-graph-help-echo))
-    (pop-to-buffer buffer)))
+      (insert (format "[[id:%s][Go to current entry]]"
+                      (plist-get current-node :id))
+              "\n\n")
+
+      (when (> (length parents) 0)
+        (--each parents
+          (insert (org-graph--render-link it 'children) "    "))
+        (insert "\n\n"))
+
+      (insert "- ["
+              (org-graph--render-link current-node nil :width 38)
+              "]\n")
+      (--each siblings
+        (insert "- "
+                (org-graph--render-link it '(children parents))
+                "\n"))
+      (insert "\n\n")
+
+      (when (> (length children) 0)
+        (goto-char (point-min))
+        (goto-char (text-property-any
+                    (point-min) (point-max)
+                    (intern (plist-get current-node :id)) t))
+        (end-of-line)
+        (font-lock-ensure (point-min) (point-max))
+        (while (< (current-column) 43) (insert " "))
+        (insert "-> ")
+        (insert-rectangle
+         (--map (org-graph--render-link it 'parents) children)))
+
+      (goto-char (point-max))
+
+      ;; find the maximum definition name
+      (let ((definitions nil)
+            (max-length 0))
+        (when source (push "source" definitions))
+        (when keywords (push "keywords" definitions))
+        (when definitions
+          (setq max-length
+                (length (-max-by (lambda (a b) (>= (length a) (length b))) definitions))))
+
+        (when source
+          (insert
+           (format (format "- %%-%ds :: %%s\n" max-length) "SOURCE" source)))
+        (when keywords
+          (insert
+           (format (format "- %%-%ds :: %%s\n" max-length) "KEYWORDS"
+                   (mapconcat #'identity keywords ", "))))
+
+        (when (or source keywords ) (insert "\n")))
+
+      (when resources
+        (insert "* Resources\n"
+                resources
+                "\n\n"))
+
+      (when abstract
+        (insert "* Abstract\n"
+                abstract
+                "\n\n"))
+
+      ;; insert the node directly
+      (let ((tree nil))
+        (org-with-point-at pom
+          (let (kill-ring)
+            ;; For leaf nodes, insert everything, for non-leaf nodes,
+            ;; only insert the content up to the next heading.  If the
+            ;; content is empty, do not insert anything.
+            (shut-up (org-copy-subtree nil nil nil (not (org-graph-leaf-p))))
+            (setq tree org-subtree-clip)
+            (let ((content (org-graph--get-headline-content)))
+              (when (string-match-p "\\` *\\'" content)
+                (setq tree nil)))))
+        (when tree (insert tree))
+        (org-cycle-hide-drawers 'all))
+
+      (put-text-property (point-min) (point-max) 'help-echo 'org-graph-help-echo)
+      (goto-char (point-min))
+
+      (toggle-read-only 1))))
 
 (defun org-graph-cursor-sensor (window old dir)
   (if (eq dir 'left)
@@ -214,16 +418,18 @@ If POM is a list, first extract the :pom property and use that."
       (with-selected-window window
         (org-graph-highlight position))
     (ov-clear 'org-node-graph))
-  "")
+  (-if-let (name (get-text-property position 'org-node-graph-name))
+      name
+    ""))
 
 (defun org-graph-highlight (point)
   (ov-clear 'org-node-graph)
   (save-excursion
     (--each (get-text-property point 'org-node-graph-relatives)
-      (let* ((beg (text-property-any
-                   (point-min) (point-max)
-                   (intern it) t))
-             (end (next-single-property-change beg (intern it))))
+      (when-let* ((beg (text-property-any
+                        (point-min) (point-max)
+                        (intern it) t))
+                  (end (next-single-property-change beg (intern it))))
         (ov beg end 'org-node-graph t 'face '(:background "black"))))))
 
 
