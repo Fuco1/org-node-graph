@@ -315,7 +315,8 @@ PROPERTY can be a list, the items will be joined by a comma."
                  (cons name (org-entry-get-multivalued-property pom name)))
                 (t (error "Only :single or :multi type is supported"))))
              org-graph-rendered-properties)))
-         (max-length (-max (-map #'length (-map #'car definitions))))
+         (max-length (when definitions
+                       (-max (-map #'length (-map #'car definitions)))))
          (rendered-props nil))
 
     (--each definitions
@@ -418,9 +419,11 @@ PROPERTY can be a list, the items will be joined by a comma."
             (shut-up (org-copy-subtree nil nil nil (not (org-graph-leaf-p))))
             (setq tree org-subtree-clip)
             (let ((content (org-graph--get-headline-content)))
-              (when (string-match-p "\\` *\\'" content)
+              (when (and (string-match-p "\\` *\\'" content)
+                         (not (org-graph-leaf-p)))
                 (setq tree nil)))))
-        (when tree (insert tree))
+        (when tree
+          (insert "* Node\n" tree))
         (org-cycle-hide-drawers 'all))
 
       (put-text-property (point-min) (point-max) 'help-echo 'org-graph-help-echo)
