@@ -233,9 +233,6 @@ If POM is a list, first extract the :pom property and use that."
     (if id (org-id-goto id)
       (user-error "Child node not found"))))
 
-(drawer
- (:begin 40170 :end 40372 :drawer-name "RESOURCES" :contents-begin 40182 :contents-end 40365 ...))
-
 (defun org-graph--extract-special-element (pom type filter)
   (declare (indent 1))
   (org-with-point-at pom
