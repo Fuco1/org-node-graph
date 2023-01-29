@@ -71,15 +71,9 @@ If POM is a list, first extract the :pom property and use that."
                 (point-marker)))
   (let ((parents-from-property (org-graph--get-parents-from-property pom))
         (parent-from-tree (org-graph--get-parent-from-tree pom)))
-    (-map
-     (lambda (p)
-       (org-with-point-at p
-         (list :pom p
-               :id (org-id-get-create)
-               :name (org-get-heading 'no-tags 'no-todo))))
-     (if parent-from-tree
-         (cons parent-from-tree parents-from-property)
-       parents-from-property))))
+    (-map #'org-graph--make-node (if parent-from-tree
+                                     (cons parent-from-tree parents-from-property)
+                                   parents-from-property))))
 
 (defun org-graph-add-parent (&optional pom)
   (interactive)
@@ -137,13 +131,8 @@ If POM is a list, first extract the :pom property and use that."
                 (point-marker)))
   (let ((children-from-property (org-graph--get-children-from-property pom))
         (children-from-tree (org-graph--get-children-from-tree pom)))
-    (-map
-     (lambda (p)
-       (org-with-point-at p
-         (list :pom p
-               :id (org-id-get-create)
-               :name (org-get-heading 'no-tags 'no-todo))))
-     (-concat children-from-tree children-from-property))))
+    (-map #'org-graph--make-node
+          (-concat children-from-tree children-from-property))))
 
 (defun org-graph-add-child (&optional pom)
   (interactive)
