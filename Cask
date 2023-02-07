@@ -1,10 +1,7 @@
 (source melpa)
-(source org)
+(source gnu)
 
-(package "org-node-graph" "0.1.0" "Graph database in org-mode")
-
-(depends-on "dash" "2.13.0")
-(depends-on "org-plus-contrib")
+(package-file "org-graph.el")
 
 (development
  (depends-on "undercover")
