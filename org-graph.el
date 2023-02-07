@@ -229,7 +229,10 @@ If POM is a list, first extract the :pom property and use that."
     (if id (org-id-goto id)
       (user-error "Child node not found"))))
 
-(defun org-graph--extract-special-element (pom type filter)
+(defun org-graph--extract-special-element (pom type filter &optional as-element)
+  "Return first element of TYPE in subtree at POM matching FILTER.
+
+Element is returned as a string."
   (declare (indent 1))
   (org-with-point-at pom
     (save-excursion
@@ -242,9 +245,10 @@ If POM is a list, first extract the :pom property and use that."
               (let ((prop (cadr elem)))
                 (when (and (< (plist-get prop :begin) max)
                            (funcall filter prop))
-                  (buffer-substring-no-properties
-                   (plist-get prop :contents-begin)
-                   (plist-get prop :contents-end)))))
+                  (if as-element elem
+                    (buffer-substring-no-properties
+                     (plist-get prop :contents-begin)
+                     (plist-get prop :contents-end))))))
             nil
             'first-match))))))
 
