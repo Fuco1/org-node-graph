@@ -290,7 +290,10 @@ If UNSAFE is non-nil, assume point is on headline."
     (propertize
      (format "[[org-node-graph:%s][%s]]"
              id
-             (truncate-string-to-width name width nil nil t))
+             (->> (truncate-string-to-width name width nil nil t)
+                  ;; sanitize the brackets [] into {}
+                  (replace-regexp-in-string "\\[" "{")
+                  (replace-regexp-in-string "\\]" "}")))
      (intern id) t
      'org-node-graph-id id
      'org-node-graph-name name
