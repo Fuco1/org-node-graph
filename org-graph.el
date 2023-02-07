@@ -1,7 +1,13 @@
 (require 'dash)
 (require 'org)
-(require 'orgba)
 (require 'org-fold)
+
+(defun org-graph--next-heading ()
+  "Go to next heading or end of file if at the last heading.
+
+Return point."
+  (or (outline-next-heading) (goto-char (point-max)))
+  (point))
 
 (defun org-graph-target (prompt)
   (let ((org-refile-target-verify-function nil))
@@ -230,7 +236,7 @@ If POM is a list, first extract the :pom property and use that."
       (save-restriction
         (widen)
         (org-narrow-to-subtree)
-        (let ((max (save-excursion (orgba-next-heading))))
+        (let ((max (save-excursion (org-graph--next-heading))))
           (org-element-map (org-element-parse-buffer) type
             (lambda (elem)
               (let ((prop (cadr elem)))
@@ -250,7 +256,7 @@ If UNSAFE is non-nil, assume point is on headline."
   (unless unsafe
     ;; To improve performance in loops (e.g. with `org-map-entries')
     (org-back-to-heading))
-  (let ((max-pos (save-excursion (orgba-next-heading)))
+  (let ((max-pos (save-excursion (org-graph--next-heading)))
         (pos (point)))
     (while (and pos (< pos max-pos))
       (when-let* ((element (org-element-at-point)))
@@ -262,7 +268,7 @@ If UNSAFE is non-nil, assume point is on headline."
 
 (defun org-graph--get-headline-content ()
   "Get content of current headline"
-  (let ((max-pos (save-excursion (orgba-next-heading))))
+  (let ((max-pos (save-excursion (org-graph--next-heading))))
     (save-excursion
       (org-graph--forward-to-entry-content)
       (buffer-substring-no-properties (point) max-pos))))
