@@ -37,7 +37,7 @@ If POM is nil, `point-marker' is returned."
 ;;; Parents
 
 (defun org-graph--get-parent-from-tree (&optional pom)
-  "Get all parents of the headline at POM.
+  "Get the first outline parent of the headline at POM.
 
 If any of the parents has the property GRAPH_PARENT_SKIP this
 parent is not included in the parents but its parents *are*
