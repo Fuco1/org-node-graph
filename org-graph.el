@@ -345,6 +345,17 @@ If UNSAFE is non-nil, assume point is on headline."
      'org-node-graph-relatives
      (-uniq (-map (-lambda ((&plist :id)) id) relatives-list)))))
 
+(defcustom org-graph-rendered-properties
+  '(
+    ("KEYWORDS" . :multi)
+    ("SOURCE" . :single)
+    ("AUTHOR" . :single)
+    ("PUBLISHED" . :single)
+    )
+  "Properties rendered on the node page."
+  :type 'alist
+  :group 'org-graph)
+
 (defun org-graph--render-properties (pom)
   "Render PROPERTIES.
 
@@ -378,14 +389,24 @@ PROPERTY can be a list, the items will be joined by a comma."
 
     (nreverse rendered-props)))
 
-(defcustom org-graph-rendered-properties
-  '(
-    ("KEYWORDS" . :multi)
-    ("SOURCE" . :single)
-    ("AUTHOR" . :single)
-    ("PUBLISHED" . :single)
-    )
-  "Properties rendered on the node page.")
+(defun org-graph--render-logbook (pom elem)
+  "Render logbook element ELEM."
+  (let* ((prop (cadr (nth 2 elem)))
+         (items (plist-get prop :structure)))
+    (org-with-point-at pom
+      (save-match-data
+        (save-excursion
+          (s-join
+           "\n"
+           (-keep (lambda (item)
+                    (goto-char (car item))
+                    (when (looking-at "- Note taken on \\[\\(.*\\)\\] \\\\\\\\$")
+                      (forward-line)
+                      (concat
+                       "- [" (match-string 1) "] "
+                       (buffer-substring-no-properties
+                        (point) (nth 6 item)))))
+                  items)))))))
 
 (defun org-graph--id-goto (id)
   "Pop to the buffer containing the entry with id ID.
@@ -419,6 +440,12 @@ Move the cursor to that entry in that buffer."
          (parents (org-graph-get-parents pom))
          (children (org-graph-get-children pom))
          (siblings (org-graph-get-siblings pom))
+         (logbook
+          (org-graph--extract-special-element pom
+            'drawer
+            (lambda (prop)
+              (equal (plist-get prop :drawer-name) "LOGBOOK"))
+            :as-element))
          (abstract
           (org-graph--extract-special-element pom
             'special-block
@@ -481,6 +508,13 @@ Move the cursor to that entry in that buffer."
         (insert "* Abstract\n"
                 abstract
                 "\n\n"))
+
+      (when logbook
+        (-when-let ((logbook-rendered (org-graph--render-logbook pom logbook)))
+          (insert "* Logbook\n" logbook-rendered "\n\n")
+          (save-excursion
+            (org-mark-subtree)
+            (call-interactively 'org-fill-paragraph))))
 
       ;; insert the node directly
       (let ((tree nil))
