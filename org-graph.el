@@ -1,6 +1,7 @@
 (require 'dash)
 (require 'org)
 (require 'orgba)
+(require 'org-fold)
 
 (defun org-graph-target (prompt)
   (let ((org-refile-target-verify-function nil))
@@ -328,6 +329,30 @@ PROPERTY can be a list, the items will be joined by a comma."
     )
   "Properties rendered on the node page.")
 
+(defun org-graph--id-goto (id)
+  "Pop to the buffer containing the entry with id ID.
+Move the cursor to that entry in that buffer."
+  (let ((m (org-id-find id 'marker)))
+    (unless m
+      (user-error "Cannot find entry with ID \"%s\"" id))
+    (pop-to-buffer (marker-buffer m))
+    (goto-char m)
+    (move-marker m nil)
+    (org-fold-show-context)))
+
+(defvar-local org-graph-current-entry nil)
+
+(defun org-graph-goto-current ()
+  "Visit current entry in its org buffer."
+  (interactive)
+  (org-graph--id-goto (plist-get org-graph-current-entry :id)))
+
+(defun org-graph-revert-buffer ()
+  "Revert current node graph buffer."
+  (interactive)
+  (when org-graph-current-entry
+    (org-graph-render-node (plist-get org-graph-current-entry :pom))))
+
 (defun org-graph-render-node (&optional pom)
   (interactive)
   (setq pom (or pom (point-marker)))
@@ -351,6 +376,7 @@ PROPERTY can be a list, the items will be joined by a comma."
       (read-only-mode -1)
       (erase-buffer)
       (org-mode)
+      (org-graph-mode 1)
       (variable-pitch-mode -1)
 
       (insert (format "[[id:%s][Go to current entry]]"
@@ -418,7 +444,8 @@ PROPERTY can be a list, the items will be joined by a comma."
       (put-text-property (point-min) (point-max) 'help-echo 'org-graph-help-echo)
       (goto-char (point-min))
 
-      (read-only-mode 1))))
+      (read-only-mode 1)
+      (setq-local org-graph-current-entry current-node))))
 
 (defun org-graph-cursor-sensor (window _old dir)
   (if (eq dir 'left)
@@ -454,5 +481,16 @@ PROPERTY can be a list, the items will be joined by a comma."
                    (list
                     'cursor-sensor-functions (list 'org-graph-cursor-sensor))))
  :help-echo 'org-graph-help-echo)
+
+(defvar org-graph-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "g") 'org-graph-revert-buffer)
+    (define-key map (kbd "o") 'org-graph-goto-current)
+    map))
+
+(define-minor-mode org-graph-mode
+  "Minor mode for org-graph."
+  :lighter " org-graph"
+  :keymap org-graph-mode-map)
 
 (provide 'org-graph)
