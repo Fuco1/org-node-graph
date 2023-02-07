@@ -109,13 +109,24 @@ Return list of markers pointing to the child entries."
     (unless (org-entry-get (point) "GRAPH_CHILD_LEAF")
       (let* ((org-agenda-skip-function-global nil)
              (re))
-        (org-map-entries
-         'point-marker t 'tree
-         (lambda ()
-           (unless (org-entry-properties nil "GRAPH_CHILD_SKIP")
-             (push (point-marker) re))
-           (unless (= (point) pom)
-             (save-excursion (org-end-of-subtree t)))))
+        (save-restriction
+          (widen)
+          (org-back-to-heading t)
+          ;; we have to setup our own restrictions, because
+          ;; `org-map-entries' with 'tree restriction restricts one
+          ;; less char than necessary and then the last headline is
+          ;; picked up even if it is nested more levels than the
+          ;; current node's children.
+          (narrow-to-region
+           (point)
+           (save-excursion (org-end-of-subtree t t)))
+          (org-map-entries
+           'point-marker t nil
+           (lambda ()
+             (unless (org-entry-properties nil "GRAPH_CHILD_SKIP")
+               (push (point-marker) re))
+             (unless (= (point) pom)
+               (save-excursion (org-end-of-subtree t t))))))
         (setq re (nreverse re))
         (when (= (car re) pom) (pop re))
         re))))
