@@ -348,7 +348,7 @@ PROPERTY can be a list, the items will be joined by a comma."
               (equal (plist-get prop :drawer-name) "RESOURCES")))))
     (pop-to-buffer buffer)
     (with-current-buffer buffer
-      (toggle-read-only -1)
+      (read-only-mode -1)
       (erase-buffer)
       (org-mode)
       (variable-pitch-mode -1)
@@ -418,9 +418,9 @@ PROPERTY can be a list, the items will be joined by a comma."
       (put-text-property (point-min) (point-max) 'help-echo 'org-graph-help-echo)
       (goto-char (point-min))
 
-      (toggle-read-only 1))))
+      (read-only-mode 1))))
 
-(defun org-graph-cursor-sensor (window old dir)
+(defun org-graph-cursor-sensor (window _old dir)
   (if (eq dir 'left)
       (ov-clear 'org-node-graph)
     (org-graph-highlight (window-point window))))
@@ -448,7 +448,7 @@ PROPERTY can be a list, the items will be joined by a comma."
 (org-link-set-parameters
  "org-node-graph"
  :follow (lambda (id) (org-graph-render-node (org-id-find id 'marker)))
- :activate-func (lambda (beg end path _ignored)
+ :activate-func (lambda (beg end _path _ignored)
                   (add-text-properties
                    beg end
                    (list
