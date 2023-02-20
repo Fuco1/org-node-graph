@@ -1,7 +1,16 @@
-(source melpa)
-(source gnu)
+(package "org-node-graph"
+         "0.0.1"
+         "org node graph")
+
+(website-url "")
+(keywords "")
 
 (package-file "org-graph.el")
+
+(script "test" "echo \"Error: no test specified\" && exit 1")
+
+(source 'gnu)
+(source 'melpa)
 
 (depends-on "emacs" "28.2")
 (depends-on "dash" "2.17.0")

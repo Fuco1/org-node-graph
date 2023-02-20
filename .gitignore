@@ -1,1 +1,6 @@
 .cask/*
+.eask/*
+.elsa/*
+.env
+*.o
+*.so
