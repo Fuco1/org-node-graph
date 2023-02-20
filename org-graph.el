@@ -1,4 +1,4 @@
-;;; org-graph.el ---  -*- lexical-binding: t -*-
+;;; org-graph.el --- org node graph -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2023 Matúš Goljer
 
@@ -36,6 +36,48 @@
 (require 'org-element)
 (require 'org-fold)
 
+(defgroup org-graph nil
+  "Options concerning `org-graph'."
+  :tag "Org Graph"
+  :group 'org)
+
+(defcustom org-graph-targets org-refile-targets
+  "Specify all the valid org-graph targets.
+
+The format of this variable is same as `org-refile-targets'."
+  :group 'org-graph
+  :type '(repeat
+          (cons
+           (choice :value org-agenda-files
+             (const :tag "All agenda files" org-agenda-files)
+             (const :tag "Current buffer" nil)
+             (function) (variable) (file))
+           (choice :tag "Identify target headline by"
+             (cons :tag "Specific tag" (const :value :tag) (string))
+             (cons :tag "TODO keyword" (const :value :todo) (string))
+             (cons :tag "Regular expression" (const :value :regexp) (regexp))
+             (cons :tag "Level number" (const :value :level) (integer))
+             (cons :tag "Max Level number" (const :value :maxlevel) (integer))))))
+
+(defcustom org-graph-dir
+  (expand-file-name
+   (convert-standard-filename "var/org-graph/")
+   user-emacs-directory)
+  "Directory where GPT embeddings are cached."
+  :group 'org-graph
+  :type 'directory)
+
+(defcustom org-graph-embeddings-cache-dir
+  (expand-file-name
+   (convert-standard-filename "embeddings/")
+   org-graph-dir)
+  "Directory where GPT embeddings are cached."
+  :group 'org-graph
+  :type 'directory)
+
+(defvar org-graph-cache nil
+  "Cache for graph targets.")
+
 (defun org-graph--next-heading ()
   "Go to next heading or end of file if at the last heading.
 
@@ -43,11 +85,55 @@ Return point."
   (or (outline-next-heading) (goto-char (point-max)))
   (point))
 
-(defun org-graph-target (prompt)
-  (let ((org-refile-target-verify-function nil))
-    (org-refile-get-location prompt)))
+(defun org-graph-clear-cache ()
+  "Clear org-graph cache."
+  (let ((org-refile-cache org-graph-cache))
+    (org-refile-cache-clear)))
 
-(defun org-graph--resolve-pom (&optional pom)
+(defun org-graph-target (prompt &optional arg)
+  (when (equal arg '(64))
+    (org-graph-clear-cache)
+    (user-error "Cleared org-graph target cache"))
+  (let ((org-refile-target-verify-function nil)
+        (org-refile-targets org-graph-targets)
+        (org-refile-cache org-graph-cache))
+    (prog1 (org-refile-get-location prompt)
+      (setq org-graph-cache org-refile-cache))))
+
+(defun org-graph--get-files ()
+  "Produce a table with refile targets."
+  (let ((files nil)
+        (target-files nil))
+    (dolist (entry org-graph-targets)
+      (setq files (car entry))
+      (cond
+       ((null files) (push (list (buffer-file-name)) target-files))
+       ((eq files 'org-agenda-files)
+        (push (org-agenda-files 'unrestricted) target-files))
+       ((and (symbolp files) (fboundp files))
+        (push (funcall files) target-files))
+       ((and (symbolp files) (boundp files))
+        (push (symbol-value files) target-files)))
+      (when (stringp files) (push (list files) target-files)))
+    (delete-dups (nreverse (-flatten target-files)))))
+
+(defun org-graph--collect-backlinks ()
+  (let ((backlinks))
+    (dolist (file (org-graph--get-files))
+      (with-current-buffer (find-file-noselect file)
+        (when (eq major-mode 'org-mode)
+          (save-excursion
+            (goto-char (point-min))
+            (while (re-search-forward org-bracket-link-regexp nil t)
+              (let ((link (match-string-no-properties 1)))
+                (when (and link (string-prefix-p "id:" link))
+                  (push (list (substring link 3)
+                              (org-id-get-create))
+                        backlinks))))))))
+    (--map (cons (car it) (mapcar #'cadr (cdr it)))
+           (-group-by #'car backlinks))))
+
+(defun  org-graph--resolve-pom (&optional pom)
   "Resolve POM.
 
 If POM is a list, it is assumed to be a plist and we extract the
@@ -56,7 +142,8 @@ If POM is a list, it is assumed to be a plist and we extract the
 If POM is a number-or-marker it is returned.
 
 If POM is nil, `point-marker' is returned."
-  (or (and (listp pom)
+  (or (and pom
+           (listp pom)
            (plist-get pom :pom))
       pom
       (point-marker)))
@@ -66,12 +153,16 @@ If POM is nil, `point-marker' is returned."
   (org-with-point-at pom
     (list :pom pom
           :id (org-id-get-create)
-          :name (org-get-heading 'no-tags 'no-todo))))
+          :name (org-get-heading 'no-tags 'no-todo)
+          :tags (mapcar #'substring-no-properties
+                        (org-get-tags nil 'local)))))
 
 ;;; Parents
 
-(defun org-graph--get-parent-from-tree (&optional pom)
+(defun org-graph--get-parent-from-tree (&optional pom get-all)
   "Get the first outline parent of the headline at POM.
+
+If GET-ALL is non-nil, get all the parents from tree.
 
 If any of the parents has the property GRAPH_PARENT_SKIP this
 parent is not included in the parents but its parents *are*
@@ -84,15 +175,20 @@ as well give it GRAPH_PARENT_SKIP property as well.
 
 Return marker pointing to the first eligible parent entry."
   (org-with-point-at pom
-    (let ((org-agenda-skip-function-global nil))
-      (catch 'done
-        (when (org-entry-properties nil "GRAPH_PARENT_ROOT")
-          (throw 'done nil))
-        (while (org-up-heading-safe)
-          (unless (org-entry-properties nil "GRAPH_PARENT_SKIP")
-            (throw 'done (point-marker)))
-          (when (org-entry-properties nil "GRAPH_PARENT_ROOT")
-            (throw 'done nil)))))))
+    (let* ((org-agenda-skip-function-global nil)
+           (parents nil)
+           (parent
+            (catch 'done
+              (when (org-entry-properties nil "GRAPH_PARENT_ROOT")
+                (throw 'done nil))
+              (while (org-up-heading-safe)
+                (unless (org-entry-properties nil "GRAPH_PARENT_SKIP")
+                  (if get-all
+                      (push (point-marker) parents)
+                    (throw 'done (point-marker))))
+                (when (org-entry-properties nil "GRAPH_PARENT_ROOT")
+                  (throw 'done nil))))))
+      (or parent parents))))
 
 (defun org-graph--get-parents-from-property (&optional pom)
   "Get all parents specified in the GRAPH_PARENTS property at POM.
@@ -102,24 +198,25 @@ Return list of markers pointing to the parent entries."
     (let ((parents (org-entry-get-multivalued-property nil "GRAPH_PARENTS")))
       (-map (lambda (entry) (org-id-find entry 'marker)) parents))))
 
-(defun org-graph-get-parents (&optional pom)
+(defun org-graph-get-parents (&optional pom tree-all)
   "Return all parents at POM.
 
-If POM is a list, first extract the :pom property and use that."
-  (setq pom (or (and (listp pom)
-                     (plist-get pom :pom))
-                pom
-                (point-marker)))
-  (let ((parents-from-property (org-graph--get-parents-from-property pom))
-        (parent-from-tree (org-graph--get-parent-from-tree pom)))
-    (-map #'org-graph--make-node (if parent-from-tree
-                                     (cons parent-from-tree parents-from-property)
-                                   parents-from-property))))
+If POM is a list, first extract the :pom property and use that.
 
-(defun org-graph-add-parent (&optional pom)
-  (interactive)
+If TREE-ALL is non-nil, retrieve all parents from the tree."
+  (setq pom (org-graph--resolve-pom pom))
+  (let* ((parents-from-property (org-graph--get-parents-from-property pom))
+         (parent-from-tree (org-graph--get-parent-from-tree pom tree-all))
+         (prop-parents (-map #'org-graph--make-node parents-from-property))
+         (tree-parents (-map #'org-graph--make-node (-list parent-from-tree))))
+    (append
+     (mapcar (lambda (p) (plist-put p :from-prop t)) prop-parents)
+     (mapcar (lambda (p) (plist-put p :from-tree t)) tree-parents))))
+
+(defun org-graph-add-parent (&optional pom arg)
+  (interactive (list (point) current-prefix-arg))
   (org-with-point-at pom
-    (-when-let (parent (-last-item (org-graph-target "Parent: ")))
+    (-when-let (parent (-last-item (org-graph-target "Parent: " arg)))
       (let ((my-id (org-id-get-create))
             (parent-id (org-with-point-at parent (org-id-get-create))))
         (org-entry-add-to-multivalued-property parent "GRAPH_CHILDREN" my-id)
@@ -186,14 +283,24 @@ If POM is a list, first extract the :pom property and use that."
     (-map #'org-graph--make-node
           (-concat children-from-tree children-from-property))))
 
-(defun org-graph-add-child (&optional pom)
-  (interactive)
+(defun org-graph-add-child (&optional pom arg)
+  (interactive (list (point) current-prefix-arg))
   (org-with-point-at pom
-    (-when-let (child (-last-item (org-graph-target "Child: ")))
+    (-when-let (child (-last-item (org-graph-target "Child: " arg)))
       (let ((my-id (org-id-get-create))
             (child-id (org-with-point-at child (org-id-get-create))))
         (org-entry-add-to-multivalued-property child "GRAPH_PARENTS" my-id)
         (org-entry-add-to-multivalued-property pom "GRAPH_CHILDREN" child-id)))))
+
+(defun org-graph-insert-link (&optional arg)
+  "Insert a link to any valid target node."
+  (interactive "P")
+  (-when-let (target (-last-item (org-graph-target "Target: " arg)))
+    (let* ((target-node (org-graph--make-node target)))
+      (org-insert-link
+       nil
+       (format "id:%s" (plist-get target-node :id))
+       (plist-get target-node :name)))))
 
 ;;; Siblings
 
@@ -259,20 +366,20 @@ If POM is a list, first extract the :pom property and use that."
 (defun org-graph-goto-parent (&optional pom)
   (interactive)
   (setq pom (or pom (point-marker)))
-  (let* ((id (org-graph--read-relative
-              "Parent: "
-              (org-graph-get-parents pom))))
-    (if id (org-id-goto id)
-      (user-error "Parent node not found"))))
+  (if-let* ((parents (org-graph-get-parents pom)))
+      (let ((id (org-graph--read-relative "Parent: " parents)))
+        (if id (org-id-goto id)
+          (user-error "Parent node not found")))
+    (user-error "Node has no parents")))
 
 (defun org-graph-goto-child (&optional pom)
   (interactive)
   (setq pom (or pom (point-marker)))
-  (let* ((id (org-graph--read-relative
-              "Child: "
-              (org-graph-get-children pom))))
-    (if id (org-id-goto id)
-      (user-error "Child node not found"))))
+  (if-let* ((children (org-graph-get-children pom)))
+      (let ((id (org-graph--read-relative "Child: " children)))
+        (if id (org-id-goto id)
+          (user-error "Child node not found")))
+    (user-error "Node has no children")))
 
 (defun org-graph--extract-special-element (pom type filter &optional as-element)
   "Return first element of TYPE in subtree at POM matching FILTER.
@@ -304,7 +411,7 @@ Element is returned as a string."
 If UNSAFE is non-nil, assume point is on headline."
   (unless unsafe
     ;; To improve performance in loops (e.g. with `org-map-entries')
-    (org-back-to-heading))
+    (ignore-errors (org-back-to-heading)))
   (let ((max-pos (save-excursion (org-graph--next-heading)))
         (pos (point)))
     (while (and pos (< pos max-pos))
@@ -440,6 +547,14 @@ Move the cursor to that entry in that buffer."
          (parents (org-graph-get-parents pom))
          (children (org-graph-get-children pom))
          (siblings (org-graph-get-siblings pom))
+         (backlinks (mapcar
+                     #'org-graph--make-node
+                     (mapcar
+                      (lambda (x) (org-id-find x t))
+                      (cdr
+                       (assoc
+                        (plist-get current-node :id)
+                        (org-graph--collect-backlinks))))))
          (logbook
           (org-graph--extract-special-element pom
             'drawer
@@ -493,6 +608,12 @@ Move the cursor to that entry in that buffer."
         (insert "-> ")
         (insert-rectangle
          (--map (org-graph--render-link it 'parents) children)))
+
+      (when (> (length backlinks) 0)
+        (insert "- Backlinks :: ")
+        (--each backlinks
+          (insert (org-graph--render-link it) "    "))
+        (insert "\n\n"))
 
       (goto-char (point-max))
 
