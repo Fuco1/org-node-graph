@@ -26,6 +26,8 @@
 
 ;;; Code:
 
+(require 'mule-util)
+
 (require 'dash)
 (require 'ov)
 (require 's)
@@ -78,6 +80,13 @@ The format of this variable is same as `org-refile-targets'."
 (defvar org-graph-cache nil
   "Cache for graph targets.")
 
+(defvar org-graph-breadcrumbs nil
+  "List of previously visited entries.
+
+The `car' of this list is the current entry.  When we move back,
+we pop from the start of the list.  When we visit more buffers,
+we push to the front.")
+
 (defun org-graph--next-heading ()
   "Go to next heading or end of file if at the last heading.
 
@@ -117,21 +126,41 @@ Return point."
       (when (stringp files) (push (list files) target-files)))
     (delete-dups (nreverse (-flatten target-files)))))
 
+(defvar org-graph-backlinks-cache (make-hash-table :test #'equal))
+(defvar org-graph-backlinks-grouped-cache nil)
+
 (defun org-graph--collect-backlinks ()
-  (let ((backlinks))
+  (let ((backlinks)
+        (cache-updated nil))
     (dolist (file (org-graph--get-files))
       (with-current-buffer (find-file-noselect file)
-        (when (eq major-mode 'org-mode)
-          (save-excursion
-            (goto-char (point-min))
-            (while (re-search-forward org-bracket-link-regexp nil t)
-              (let ((link (match-string-no-properties 1)))
-                (when (and link (string-prefix-p "id:" link))
-                  (push (list (substring link 3)
-                              (org-id-get-create))
-                        backlinks))))))))
-    (--map (cons (car it) (mapcar #'cadr (cdr it)))
-           (-group-by #'car backlinks))))
+        (let ((sha1 (sha1 (buffer-substring-no-properties (point-min) (point-max))))
+              (cache-entry (map-elt org-graph-backlinks-cache file))
+              (file-backlinks))
+          (if (or (not cache-entry)
+                  (not (equal (plist-get cache-entry :sha1) sha1)))
+              (when (eq major-mode 'org-mode)
+                (save-excursion
+                  (goto-char (point-min))
+                  (while (re-search-forward org-bracket-link-regexp nil t)
+                    (let ((link (match-string-no-properties 1)))
+                      (when (and link (string-prefix-p "id:" link))
+                        (push (list (substring link 3)
+                                    (org-id-get-create))
+                              file-backlinks))))
+                  (map-put! org-graph-backlinks-cache file
+                            (list :sha1 sha1
+                                  :backlinks file-backlinks))
+                  (setq cache-updated t)))
+            (setq file-backlinks (plist-get cache-entry :backlinks)))
+          (dolist (backlink file-backlinks)
+            (push backlink backlinks)))))
+    (if (or cache-updated
+            (not org-graph-backlinks-grouped-cache))
+        (let ((re (--map (cons (car it) (mapcar #'cadr (cdr it)))
+                         (-group-by #'car backlinks))))
+          (setq org-graph-backlinks-grouped-cache re))
+      org-graph-backlinks-grouped-cache)))
 
 (defun  org-graph--resolve-pom (&optional pom)
   "Resolve POM.
@@ -142,14 +171,15 @@ If POM is a list, it is assumed to be a plist and we extract the
 If POM is a number-or-marker it is returned.
 
 If POM is nil, `point-marker' is returned."
-  (or (and pom
-           (listp pom)
+  (or (and (listp pom)
            (plist-get pom :pom))
       pom
       (point-marker)))
 
 (defun org-graph--make-node (pom)
   "Make node at POM"
+  (when (stringp pom)
+    (setq pom (org-id-find pom 'marker)))
   (org-with-point-at pom
     (list :pom pom
           :id (org-id-get-create)
@@ -270,14 +300,11 @@ Return list of markers pointing to the child entries."
     (let ((children (org-entry-get-multivalued-property nil "GRAPH_CHILDREN")))
       (-map (lambda (entry) (org-id-find entry 'marker)) children))))
 
-(defun org-graph-get-children (&optional pom)
+(defun org-graph-get-children (&optional pom b)
   "Return all children at POM.
 
 If POM is a list, first extract the :pom property and use that."
-  (setq pom (or (and (listp pom)
-                     (plist-get pom :pom))
-                pom
-                (point-marker)))
+  (setq pom (org-graph--resolve-pom pom))
   (let ((children-from-property (org-graph--get-children-from-property pom))
         (children-from-tree (org-graph--get-children-from-tree pom)))
     (-map #'org-graph--make-node
@@ -431,26 +458,52 @@ If UNSAFE is non-nil, assume point is on headline."
 
 (cl-defun org-graph--render-link (item &optional relatives
                                        &key (width 40))
+  (when (stringp item)
+    (setq item (org-id-find item 'marker)))
+  (when (markerp item)
+    (setq item (org-graph--make-node item)))
+
   (let* ((id (plist-get item :id))
          (name (plist-get item :name))
          (relatives (-list relatives))
-         (relatives-list
-          (-concat (when (memq 'children relatives)
-                     (org-graph-get-children item))
-                   (when (memq 'parents relatives)
-                     (org-graph-get-parents item)))))
+         (parents-list
+          (org-graph-get-parents item 'tree-all))
+         (tree (--filter
+                (plist-get it :from-tree)
+                parents-list))
+         (children-list
+          (when (memq 'children relatives)
+            (org-graph-get-children item))))
     (propertize
      (format "[[org-node-graph:%s][%s]]"
-             id
+             (substring-no-properties id)
              (->> (truncate-string-to-width name width nil nil t)
+                  (substring-no-properties)
                   ;; sanitize the brackets [] into {}
                   (replace-regexp-in-string "\\[" "{")
                   (replace-regexp-in-string "\\]" "}")))
      (intern id) t
      'org-node-graph-id id
-     'org-node-graph-name name
-     'org-node-graph-relatives
-     (-uniq (-map (-lambda ((&plist :id)) id) relatives-list)))))
+     'org-node-graph-name
+     (s-join " / "
+             (-snoc (--map-indexed
+                     (propertize
+                      (substring-no-properties (plist-get it :name))
+                      'face
+                      `(quote ,(intern
+                                (format "org-level-%d" (1+ it-index))))
+                      'fontified t)
+                     tree)
+                    (propertize
+                     (substring-no-properties name)
+                     'face
+                     `(quote ,(intern (format "org-level-%d" (1+ (length tree)))))
+                     'fontified t)))
+     'org-node-graph-parents
+     (when (memq 'parents relatives)
+       (-uniq (-map (-lambda ((&plist :id)) id) parents-list)))
+     'org-node-graph-children
+     (-uniq (-map (-lambda ((&plist :id)) id) children-list)))))
 
 (defcustom org-graph-rendered-properties
   '(
@@ -527,34 +580,58 @@ Move the cursor to that entry in that buffer."
     (org-fold-show-context)))
 
 (defvar-local org-graph-current-entry nil)
+(defvar-local org-graph-current-query-data nil)
 
 (defun org-graph-goto-current ()
   "Visit current entry in its org buffer."
   (interactive)
   (org-graph--id-goto (plist-get org-graph-current-entry :id)))
 
+(defun org-graph-back ()
+  "Visit previously visited node.
+
+This uses `org-graph-breadcrumbs' for navigation."
+  (let ((current (pop org-graph-breadcrumbs))
+        (previous (pop org-graph-breadcrumbs)))
+    (condition-case err
+        (org-graph-render-node (plist-get previous :pom))
+      (error
+       (push previous org-graph-breadcrumbs)
+       (push current org-graph-breadcrumbs)))))
+
 (defun org-graph-revert-buffer ()
   "Revert current node graph buffer."
   (interactive)
-  (when org-graph-current-entry
-    (org-graph-render-node (plist-get org-graph-current-entry :pom))))
+  (cond
+   (org-graph-current-entry
+    (org-graph-render-node (plist-get org-graph-current-entry :pom)))
+   (org-graph-current-query-data
+    (org-graph-render-query
+     (plist-get org-graph-current-query-data :query)
+     (plist-get org-graph-current-query-data :results)))))
 
 (defun org-graph-render-node (&optional pom)
-  (interactive)
-  (setq pom (or pom (point-marker)))
+  (interactive (list (nth 3 (org-graph-target "Show node"))))
+  (setq pom (org-graph--resolve-pom pom))
   (let* ((current-node (org-graph--make-node pom))
          (buffer (get-buffer-create "*org-node-graph*"))
-         (parents (org-graph-get-parents pom))
-         (children (org-graph-get-children pom))
-         (siblings (org-graph-get-siblings pom))
-         (backlinks (mapcar
-                     #'org-graph--make-node
-                     (mapcar
-                      (lambda (x) (org-id-find x t))
-                      (cdr
-                       (assoc
-                        (plist-get current-node :id)
-                        (org-graph--collect-backlinks))))))
+         (parents (progn
+                    (message "Getting parents ...")
+                    (org-graph-get-parents pom)))
+         (children (progn
+                     (message "Fetching children ...")
+                     (org-graph-get-children pom)))
+         (siblings (progn
+                     (message "Fetching siblings ...")
+                     (org-graph-get-siblings pom)))
+         (backlinks (progn
+                      (message "Collecting backlinks ...")
+                      (mapcar
+                       #'org-graph--make-node
+                       (cdr
+                        (assoc
+                         (plist-get current-node :id)
+                         (org-graph--collect-backlinks))))))
          (logbook
           (org-graph--extract-special-element pom
             'drawer
@@ -571,6 +648,11 @@ Move the cursor to that entry in that buffer."
             'drawer
             (lambda (prop)
               (equal (plist-get prop :drawer-name) "RESOURCES")))))
+
+    (unless (equal (plist-get current-node :id)
+                   (plist-get (car org-graph-breadcrumbs) :id))
+      (push current-node org-graph-breadcrumbs))
+
     (pop-to-buffer buffer)
     (with-current-buffer buffer
       (read-only-mode -1)
@@ -578,44 +660,71 @@ Move the cursor to that entry in that buffer."
       (org-mode)
       (org-graph-mode 1)
       (variable-pitch-mode -1)
+      (setq-local buffer-face-mode-face '(:family "DejaVu Sans Mono" :height 140))
+      (buffer-face-mode 1)
 
-      (insert (format "[[id:%s][Go to current entry]]"
-                      (plist-get current-node :id))
-              "\n\n")
+      (when (cdr org-graph-breadcrumbs)
+        (let ((i 0))
+          (insert "Breadcrumbs: ")
+          (--each (cdr org-graph-breadcrumbs)
+            (cl-incf i)
+            (message "Rendering breadcrumbs %d/%d" i (length (cdr org-graph-breadcrumbs)))
+            (insert (org-graph--render-link it))
+            (when (< i (length (cdr org-graph-breadcrumbs)))
+              (insert " > ")))
+          (insert "\n\n")))
 
       (when (> (length parents) 0)
-        (--each parents
-          (insert (org-graph--render-link it 'children) "    "))
-        (insert "\n\n"))
+        (let ((i 0))
+          (--each parents
+            (cl-incf i)
+            (message "Rendering parents %d/%d" i (length parents))
+            (insert (org-graph--render-link it 'children) "    ")))
+        (insert "\n│\n"))
 
-      (insert "- ["
+      (insert (if siblings "├" "└"))
+
+      (insert " ["
               (org-graph--render-link current-node nil :width 38)
               "]\n")
-      (--each siblings
-        (insert "- "
-                (org-graph--render-link it '(children parents))
-                "\n"))
-      (insert "\n\n")
-
+      (let ((i 0))
+        (--each siblings
+          (cl-incf i)
+          (message "Rendering siblings %d/%d" i (length siblings))
+          (insert (if (< i (length siblings)) "├ " "└ ")
+                  (org-graph--render-link it '(children parents))
+                  "\n")))
+      (insert "\n")
       (when (> (length children) 0)
         (goto-char (point-min))
+        (forward-line 1)
         (goto-char (text-property-any
-                    (point-min) (point-max)
+                    (point) (point-max)
                     (intern (plist-get current-node :id)) t))
         (end-of-line)
         (font-lock-ensure (point-min) (point-max))
-        (while (< (current-column) 43) (insert " "))
-        (insert "-> ")
+        (insert " " (make-string (max (- 42 (current-column)) 0) ?─))
         (insert-rectangle
-         (--map (org-graph--render-link it 'parents) children)))
+         (let ((i 0))
+           (-concat
+            (--map (progn
+                     (cl-incf i)
+                     (message "Rendering children %d/%d" i (length children))
+                     (concat (cond ((= i 1) (if (= i (length children)) "─ " "┬ "))
+                                   ((= i (length children)) "└ ")
+                                   (t "├ "))
+                             (org-graph--render-link it 'parents)))
+                   children)
+            (list "" "")))))
+
+      (goto-char (point-max))
+      (beginning-of-line)
 
       (when (> (length backlinks) 0)
         (insert "- Backlinks :: ")
         (--each backlinks
-          (insert (org-graph--render-link it) "    "))
+          (insert (org-graph--render-link it '(children parents)) "    "))
         (insert "\n\n"))
-
-      (goto-char (point-max))
 
       (when-let ((rendered-props (org-graph--render-properties pom)))
         (insert (s-join "" rendered-props) "\n"))
@@ -631,7 +740,7 @@ Move the cursor to that entry in that buffer."
                 "\n\n"))
 
       (when logbook
-        (-when-let ((logbook-rendered (org-graph--render-logbook pom logbook)))
+        (when-let ((logbook-rendered (org-graph--render-logbook pom logbook)))
           (insert "* Logbook\n" logbook-rendered "\n\n")
           (save-excursion
             (org-mark-subtree)
@@ -654,6 +763,8 @@ Move the cursor to that entry in that buffer."
           (insert "* Node\n" tree))
         (org-cycle-hide-drawers 'all))
 
+      (message "org-graph-render-node ... done")
+
       (put-text-property (point-min) (point-max) 'help-echo 'org-graph-help-echo)
       (goto-char (point-min))
 
@@ -666,7 +777,8 @@ Move the cursor to that entry in that buffer."
     (org-graph-highlight (window-point window))))
 
 (defun org-graph-help-echo (window _object position)
-  (if (get-text-property position 'org-node-graph-relatives)
+  (if (or (get-text-property position 'org-node-graph-parents)
+          (get-text-property position 'org-node-graph-children))
       (with-selected-window window
         (org-graph-highlight position))
     (ov-clear 'org-node-graph))
@@ -676,13 +788,29 @@ Move the cursor to that entry in that buffer."
 
 (defun org-graph-highlight (point)
   (ov-clear 'org-node-graph)
-  (save-excursion
-    (--each (get-text-property point 'org-node-graph-relatives)
-      (when-let* ((beg (text-property-any
-                        (point-min) (point-max)
-                        (intern it) t))
-                  (end (next-single-property-change beg (intern it))))
-        (ov beg end 'org-node-graph t 'face '(:background "black"))))))
+  (cl-flet ((render-relative
+             (sym-id relation)
+             (save-excursion
+               (goto-char (point-min))
+               (let ((beg nil) (end t))
+                 (while (and (setq beg (text-property-any
+                                        (point) (point-max)
+                                        sym-id t))
+                             end)
+                   (setq end (next-single-property-change beg sym-id))
+                   (goto-char (1+ end))
+                   (ov beg end
+                       'org-node-graph t
+                       'face (cond
+                              ((eq relation 'parent)
+                               '(:background "#204a87"))
+                              ((eq relation 'child)
+                               '(:background "#5c3566")))))))))
+    (save-excursion
+      (--each (get-text-property point 'org-node-graph-parents)
+        (render-relative (intern it) 'parent))
+      (--each (get-text-property point 'org-node-graph-children)
+        (render-relative (intern it) 'child)))))
 
 
 (org-link-set-parameters
@@ -699,6 +827,10 @@ Move the cursor to that entry in that buffer."
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "g") 'org-graph-revert-buffer)
     (define-key map (kbd "o") 'org-graph-goto-current)
+    (define-key map (kbd "l") 'org-graph-back)
+    (define-key map (kbd "s") 'isearch-forward-regexp)
+    (define-key map (kbd "r") 'isearch-backward-regexp)
+    (define-key map (kbd "q") 'bury-buffer)
     map))
 
 (define-minor-mode org-graph-mode
