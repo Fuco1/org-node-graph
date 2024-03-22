@@ -109,8 +109,11 @@ Return point."
     (prog1 (org-refile-get-location prompt)
       (setq org-graph-cache org-refile-cache))))
 
-(defun org-graph--get-files ()
-  "Produce a table with refile targets."
+(defun org-graph-get-files ()
+  "Produce a list of org graph files.
+
+The files considered by org-graph are defined using
+`org-graph-targets'."
   (let ((files nil)
         (target-files nil))
     (dolist (entry org-graph-targets)
@@ -132,7 +135,7 @@ Return point."
 (defun org-graph--collect-backlinks ()
   (let ((backlinks)
         (cache-updated nil))
-    (dolist (file (org-graph--get-files))
+    (dolist (file (org-graph-get-files))
       (with-current-buffer (find-file-noselect file)
         (let ((sha1 (sha1 (buffer-substring-no-properties (point-min) (point-max))))
               (cache-entry (map-elt org-graph-backlinks-cache file))
