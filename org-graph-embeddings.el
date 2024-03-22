@@ -174,6 +174,7 @@ which we compare."
                  (plist-get query :embedding)
                  org-graph-embeddings))))))
 
+;;;###autoload
 (defun org-graph-openai-query (query)
   "Embed QUERY using openai embedding API and compare against org graph headlines."
   (interactive "sQuery: ")
@@ -190,7 +191,7 @@ which we compare."
          (org-graph-render-query
           query
           (-take 40 (org-graph-sort-embeddings embedding org-graph-embeddings)))))
-    (error (message "%s" err))))
+    (error (message "%s" (error-message-string err)))))
 
 (defun org-graph--extract-content-for-embedding ()
   "Extract headline content for embedding"
